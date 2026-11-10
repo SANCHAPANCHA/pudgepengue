@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
-const VERSION = 'v4';
+const VERSION = 'v5';
 console.log(`Bobble guest bot ${VERSION}, node ${process.version}, ${process.platform}`);
 const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
 const RUNS = Number(args.runs ?? 1);
@@ -95,9 +95,27 @@ page.on('requestfailed', r => {
 page.on('response', r => {
   if (r.status() >= 400) console.error('[http error]', r.status(), r.url().split('?')[0]);
 });
+const pending = new Map();
+page.on('request', r => pending.set(r, Date.now()));
+page.on('requestfinished', r => pending.delete(r));
+page.on('requestfailed', r => pending.delete(r));
 console.log('Opening the game...');
-await page.goto(URL_RUN, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-await page.waitForSelector('html.is-ready', { timeout: 120_000 });
+await page.goto(URL_RUN, { waitUntil: 'commit', timeout: 90_000 });
+const LOAD_LIMIT = Number(args.loadSeconds ?? 240) * 1000;
+const loadStart = Date.now();
+for (;;) {
+  const ready = await page.waitForSelector('html.is-ready', { state: 'attached', timeout: 15_000 }).then(() => true, () => false);
+  if (ready) break;
+  const secs = Math.round((Date.now() - loadStart) / 1000);
+  const slow = [...pending.entries()].filter(([, t]) => Date.now() - t > 10_000)
+    .map(([r, t]) => `${r.url().split('?')[0]} (${Math.round((Date.now() - t) / 1000)}s)`);
+  const boot = await page.evaluate(() => (document.getElementById('boot')?.innerText || '').trim().slice(0, 80)).catch(() => '');
+  console.log(`still loading (${secs}s)${boot ? `, screen: "${boot}"` : ''}${slow.length ? `, waiting for: ${slow.slice(0, 5).join(', ')}` : ''}`);
+  if (Date.now() - loadStart > LOAD_LIMIT) {
+    await page.screenshot({ path: 'bobble-debug.png' }).catch(() => {});
+    throw new Error('Game did not finish loading. Screenshot saved to bobble-debug.png');
+  }
+}
 console.log('Game loaded, starting the bot');
 if (!patched) throw new Error('game.js changed: tick hook not found, bot cannot attach');
 
