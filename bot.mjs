@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
-const VERSION = 'v5';
+const VERSION = 'v6';
 console.log(`Bobble guest bot ${VERSION}, node ${process.version}, ${process.platform}`);
 const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
 const RUNS = Number(args.runs ?? 1);
@@ -22,7 +22,7 @@ function isStaticAsset(url) {
 }
 
 // Software WebGL only for GPU-less servers (Linux/headless); on a desktop it can crash the browser.
-const launchArgs = ['--autoplay-policy=no-user-gesture-required'];
+const launchArgs = ['--autoplay-policy=no-user-gesture-required', '--disable-quic'];
 if (args.swiftshader !== undefined || (HEADLESS && process.platform === 'linux')) {
   launchArgs.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
 }
@@ -47,6 +47,18 @@ browser.on('disconnected', () => {
 });
 const context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
 
+function cleanHeaders(h) {
+  const out = {};
+  for (const [k, v] of Object.entries(h)) {
+    if (!/^(content-encoding|content-length|transfer-encoding|etag|last-modified)$/i.test(k)) out[k] = v;
+  }
+  return out;
+}
+
+async function fetchViaNode(route, req) {
+  return route.fetch({ timeout: 60_000, maxRetries: 2, headers: { ...req.headers(), 'accept-encoding': 'identity' } });
+}
+
 await context.route('**/*', async route => {
   const req = route.request();
   const url = req.url();
@@ -54,10 +66,21 @@ await context.route('**/*', async route => {
     blocked.add(`${req.method()} ${url.split('?')[0]}`);
     return route.abort();
   }
-  if (/\/src\/run\/game\.js$/.test(new URL(url).pathname)) {
+  if (!/\/src\/run\/game\.js$/.test(new URL(url).pathname)) {
+    // Some networks stall Chromium's own requests to Cloudflare while Node's work, so assets go through Node.
+    if (args.direct !== undefined) return route.continue();
+    try {
+      const res = await fetchViaNode(route, req);
+      return route.fulfill({ status: res.status(), headers: cleanHeaders(res.headers()), body: await res.body() });
+    } catch (e) {
+      console.error('[asset failed]', url.split('?')[0], e.message.split('\n')[0]);
+      return route.abort().catch(() => {});
+    }
+  }
+  {
     let res, body;
     try {
-      res = await route.fetch({ timeout: 60_000, headers: { ...req.headers(), 'accept-encoding': 'identity' } });
+      res = await fetchViaNode(route, req);
       body = await res.text();
       console.log(`game.js: HTTP ${res.status()}, ${body.length} chars, encoding=${res.headers()['content-encoding'] || 'none'}`);
     } catch (e) {
@@ -75,15 +98,11 @@ await context.route('**/*', async route => {
       return route.continue();
     }
     // Body is already decoded and modified: original encoding/length headers would corrupt it.
-    const headers = {};
-    for (const [k, v] of Object.entries(res.headers())) {
-      if (!/^(content-encoding|content-length|transfer-encoding|etag|last-modified)$/i.test(k)) headers[k] = v;
-    }
+    const headers = cleanHeaders(res.headers());
     headers['content-type'] = 'text/javascript; charset=utf-8';
     headers['cache-control'] = 'no-store';
     return route.fulfill({ status: res.status(), headers, body });
   }
-  return route.continue();
 });
 
 const page = await context.newPage();
