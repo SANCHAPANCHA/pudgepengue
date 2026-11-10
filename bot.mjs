@@ -1,34 +1,38 @@
-// Guest-mode autoplayer for Bobble Run (https://unboxbobble.com/run).
-// Runs are never saved: fresh profile without a wallet, every request except
-// static game assets is aborted, and the bot refuses to start if any auth is found.
+// Autoplayer for Bobble Run (https://unboxbobble.com/run) driven by the game's built-in demo AI.
+//
+// Guest mode (default): fresh profile, no wallet, every non-asset request is aborted — nothing is saved.
+// Online mode (--online): persistent browser profile where you connect your wallet yourself; runs are
+// played and submitted through the official game client (allowed by the BOBBLE team, Nov 2026).
+// The bot never touches wallet keys: you sign in manually in the browser window.
 import { chromium } from 'playwright';
+import path from 'node:path';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
-const VERSION = 'v9';
-console.log(`Bobble guest bot ${VERSION}, node ${process.version}, ${process.platform}`);
-const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
-const RUNS = Number(args.runs ?? 1);
-const HEADLESS = !('headed' in args);
-const SHOT = args.screenshot; // optional path prefix for screenshots
+const STORAGE_KEY = 'bobble.run.v1';
+const VERSION = 'v10';
+const args = Object.fromEntries(process.argv.slice(2).map(a => {
+  const [k, ...v] = a.replace(/^--/, '').split('=');
+  return [k, v.length ? v.join('=') : true];
+}));
+const ONLINE = 'online' in args;
+const HEADLESS = ONLINE ? false : !('headed' in args);
+const RUNS = Number(args.runs ?? (ONLINE ? 0 : 1)); // 0 = until Ctrl+C
+// Game sessions need ~61 min of validity at start; release controls before a run gets too long to submit.
+const MAX_RUN_MS = Number(args.maxRunMinutes ?? (ONLINE ? 50 : 0)) * 60_000;
+const SHOT = args.screenshot;
+console.log(`Bobble bot ${VERSION} (${ONLINE ? 'ONLINE: runs are saved to your wallet' : 'guest: nothing is saved'}), node ${process.version}, ${process.platform}`);
 
 const blocked = new Set();
 let patched = false;
 
-function isStaticAsset(url) {
-  const u = new URL(url);
-  if (u.hostname !== HOST) return false;
+function isStaticAsset(u) {
   return u.pathname === '/run' || u.pathname.startsWith('/v/') || /\.(woff2?|ttf|png|jpe?g|webp|svg|glb|gltf|ktx2|mp3|ogg|wav|css|ico)$/.test(u.pathname);
 }
 
-// Software WebGL only for GPU-less servers (Linux/headless); on a desktop it can crash the browser.
-const launchArgs = ['--autoplay-policy=no-user-gesture-required', '--disable-quic'];
-if ('swiftshader' in args || (HEADLESS && process.platform === 'linux')) {
-  launchArgs.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
-}
 // Accepts scheme://host:port, scheme://user:pass@host:port, or scheme://host:port:user:pass.
 function parseProxy(raw) {
-  if (!raw) return undefined;
+  if (!raw || raw === true) return undefined;
   const m = /^(?:(\w+):\/\/)?([^:@/]+):(\d+):([^:]+):(.+)$/.exec(raw);
   if (m) return { server: `${m[1] || 'http'}://${m[2]}:${m[3]}`, username: m[4], password: m[5] };
   const u = new URL(raw.includes('://') ? raw : `http://${raw}`);
@@ -38,26 +42,52 @@ function parseProxy(raw) {
 }
 const PROXY = parseProxy(args.proxy || process.env.BOBBLE_PROXY);
 if (PROXY) console.log(`Proxy: ${PROXY.server}${PROXY.username ? ' (with login)' : ''}`);
-const channels = args.channel ? [args.channel]
-  : process.platform === 'win32' ? [undefined, 'msedge', 'chrome'] : [undefined, 'chrome'];
-let browser;
-for (const channel of channels) {
-  try {
-    browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel, proxy: PROXY });
-    console.log(`Browser: ${channel || 'playwright chromium'}, ${HEADLESS ? 'hidden (add --headed to see it)' : 'window visible'}`);
-    break;
-  } catch (e) {
-    console.warn(`Could not start ${channel || 'playwright chromium'}: ${e.message.split('\n')[0]}`);
-  }
+
+const launchArgs = ['--autoplay-policy=no-user-gesture-required', '--disable-quic'];
+// Software WebGL only for GPU-less servers; on a desktop it can crash the browser.
+if ('swiftshader' in args || (HEADLESS && process.platform === 'linux')) {
+  launchArgs.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
 }
-if (!browser) throw new Error('No browser could be started. Run: npx playwright install chromium');
+const label = c => c || 'playwright chromium';
+let browser = null;
+let context;
+if (ONLINE) {
+  // Branded Chrome/Edge first: wallet extensions install from their stores there.
+  const channels = args.channel ? [args.channel === 'chromium' ? undefined : args.channel] : ['chrome', 'msedge', undefined];
+  const profileDir = path.resolve(args.profile || 'bobble-profile');
+  for (const channel of channels) {
+    try {
+      context = await chromium.launchPersistentContext(profileDir, {
+        headless: false, channel, args: launchArgs, proxy: PROXY, viewport: null,
+        ignoreDefaultArgs: ['--disable-extensions', '--enable-automation', '--disable-component-extensions-with-background-pages'],
+      });
+      console.log(`Browser: ${label(channel)}, profile: ${profileDir}`);
+      break;
+    } catch (e) {
+      console.warn(`Could not start ${label(channel)}: ${e.message.split('\n')[0]}`);
+    }
+  }
+} else {
+  const channels = args.channel ? [args.channel] : process.platform === 'win32' ? [undefined, 'msedge', 'chrome'] : [undefined, 'chrome'];
+  for (const channel of channels) {
+    try {
+      browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel, proxy: PROXY });
+      console.log(`Browser: ${label(channel)}, ${HEADLESS ? 'hidden (add --headed to see it)' : 'window visible'}`);
+      break;
+    } catch (e) {
+      console.warn(`Could not start ${label(channel)}: ${e.message.split('\n')[0]}`);
+    }
+  }
+  if (browser) context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
+}
+if (!context) throw new Error('No browser could be started. Run: npx playwright install chromium');
+
 let closing = false;
-browser.on('disconnected', () => {
+context.on('close', () => {
   if (closing) return;
   console.error('\nBrowser closed. Do not close the game window while the bot runs.');
   process.exit(1);
 });
-const context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
 
 function cleanHeaders(h) {
   const out = {};
@@ -67,69 +97,82 @@ function cleanHeaders(h) {
   return out;
 }
 
+// Some networks stall Chromium's own requests to Cloudflare while Node's work, so game traffic goes through Node.
 async function fetchViaNode(route, req) {
-  return route.fetch({ timeout: 60_000, maxRetries: 2, headers: { ...req.headers(), 'accept-encoding': 'identity' } });
+  return route.fetch({ timeout: 60_000, maxRetries: req.method() === 'GET' ? 2 : 0, headers: { ...req.headers(), 'accept-encoding': 'identity' } });
+}
+
+async function passThroughNode(route, req) {
+  if ('direct' in args) return route.continue();
+  try {
+    const res = await fetchViaNode(route, req);
+    return route.fulfill({ status: res.status(), headers: cleanHeaders(res.headers()), body: await res.body() });
+  } catch (e) {
+    console.error('[request failed via node]', req.method(), req.url().split('?')[0], e.message.split('\n')[0]);
+    return route.abort().catch(() => {});
+  }
+}
+
+async function serveGameJs(route, req) {
+  let res, body;
+  try {
+    res = await fetchViaNode(route, req);
+    body = await res.text();
+    console.log(`game.js: HTTP ${res.status()}, ${body.length} chars`);
+  } catch (e) {
+    console.error('Could not download game.js:', e.message.split('\n')[0]);
+    return route.abort();
+  }
+  // Main tick: `let t=isRun?input.poll():demoBot.next(state);` -> the built-in bot drives real runs too.
+  // Its inputs still go through the game's own per-second input cap and are recorded for server replay.
+  const re = /let (\w+)=(\w+)\?(\w+)\.poll\(\):(\w+)\.next\((\w+)\);/;
+  if (!re.test(body)) {
+    console.error('game.js: hook not found, start of file:', JSON.stringify(body.slice(0, 80)));
+    return route.continue();
+  }
+  body = body.replace(re, (_, t, e, x, z, s) =>
+    `let ${t}=${e}?(globalThis.__guestBot?(globalThis.__guestState=${s},${z}.next(${s})):${x}.poll()):(globalThis.__guestState=${s},${z}.next(${s}));`);
+  patched = true;
+  const headers = cleanHeaders(res.headers());
+  headers['content-type'] = 'text/javascript; charset=utf-8';
+  headers['cache-control'] = 'no-store';
+  return route.fulfill({ status: res.status(), headers, body });
 }
 
 await context.route('**/*', async route => {
   const req = route.request();
-  const url = req.url();
-  if (req.method() !== 'GET' || !isStaticAsset(url)) {
-    blocked.add(`${req.method()} ${url.split('?')[0]}`);
-    return route.abort();
-  }
-  if (!/\/src\/run\/game\.js$/.test(new URL(url).pathname)) {
-    // Some networks stall Chromium's own requests to Cloudflare while Node's work, so assets go through Node.
-    if ('direct' in args) return route.continue();
-    try {
-      const res = await fetchViaNode(route, req);
-      return route.fulfill({ status: res.status(), headers: cleanHeaders(res.headers()), body: await res.body() });
-    } catch (e) {
-      console.error('[asset failed]', url.split('?')[0], e.message.split('\n')[0]);
-      return route.abort().catch(() => {});
-    }
-  }
-  {
-    let res, body;
-    try {
-      res = await fetchViaNode(route, req);
-      body = await res.text();
-      console.log(`game.js: HTTP ${res.status()}, ${body.length} chars, encoding=${res.headers()['content-encoding'] || 'none'}`);
-    } catch (e) {
-      console.error('Could not download game.js:', e.message.split('\n')[0]);
-      return route.abort();
-    }
-    // Main tick: `let t=isRun?input.poll():demoBot.next(state);` -> let the built-in bot drive guest runs too.
-    const re = /let (\w+)=(\w+)\?(\w+)\.poll\(\):(\w+)\.next\((\w+)\);/;
-    if (re.test(body)) {
-      body = body.replace(re, (_, t, e, x, z, s) =>
-        `let ${t}=${e}?(globalThis.__guestBot?(globalThis.__guestState=${s},${z}.next(${s})):${x}.poll()):(globalThis.__guestState=${s},${z}.next(${s}));`);
-      patched = true;
-    } else {
-      console.error('game.js: hook not found, start of file:', JSON.stringify(body.slice(0, 80)));
-      return route.continue();
-    }
-    // Body is already decoded and modified: original encoding/length headers would corrupt it.
-    const headers = cleanHeaders(res.headers());
-    headers['content-type'] = 'text/javascript; charset=utf-8';
-    headers['cache-control'] = 'no-store';
-    return route.fulfill({ status: res.status(), headers, body });
-  }
+  const u = new URL(req.url());
+  const onHost = u.hostname === HOST;
+  if (onHost && u.pathname.endsWith('/src/run/game.js')) return serveGameJs(route, req);
+  if (onHost && req.method() === 'GET' && isStaticAsset(u)) return passThroughNode(route, req);
+  if (ONLINE) return onHost ? passThroughNode(route, req) : route.continue();
+  blocked.add(`${req.method()} ${req.url().split('?')[0]}`);
+  return route.abort();
 });
 
-const page = await context.newPage();
+const page = context.pages()[0] || await context.newPage();
+if (!ONLINE) await page.setViewportSize({ width: 900, height: 1200 });
 page.on('pageerror', e => console.error('[page error]', e.message));
 page.on('requestfailed', r => {
   const u = r.url().split('?')[0];
   if (!blocked.has(`${r.method()} ${u}`)) console.error('[request failed]', u, r.failure()?.errorText);
 });
-page.on('response', r => {
-  if (r.status() >= 400) console.error('[http error]', r.status(), r.url().split('?')[0]);
+let lastRunResponse = null;
+page.on('response', async r => {
+  const u = new URL(r.url());
+  if (u.hostname === HOST && u.pathname === '/api/run' && r.request().method() === 'POST') {
+    let data = null;
+    try { data = await r.json(); } catch {}
+    lastRunResponse = { status: r.status(), data };
+  } else if (r.status() >= 400) {
+    console.error('[http error]', r.status(), r.url().split('?')[0]);
+  }
 });
 const pending = new Map();
 page.on('request', r => pending.set(r, Date.now()));
 page.on('requestfinished', r => pending.delete(r));
 page.on('requestfailed', r => pending.delete(r));
+
 console.log('Opening the game...');
 await page.goto(URL_RUN, { waitUntil: 'commit', timeout: 90_000 });
 const LOAD_LIMIT = Number(args.loadSeconds ?? 240) * 1000;
@@ -140,28 +183,44 @@ for (;;) {
   const secs = Math.round((Date.now() - loadStart) / 1000);
   const slow = [...pending.entries()].filter(([, t]) => Date.now() - t > 10_000)
     .map(([r, t]) => `${r.url().split('?')[0]} (${Math.round((Date.now() - t) / 1000)}s)`);
-  const boot = await page.evaluate(() => (document.getElementById('boot')?.innerText || '').trim().slice(0, 80)).catch(() => '');
-  console.log(`still loading (${secs}s)${boot ? `, screen: "${boot}"` : ''}${slow.length ? `, waiting for: ${slow.slice(0, 5).join(', ')}` : ''}`);
+  console.log(`still loading (${secs}s)${slow.length ? `, waiting for: ${slow.slice(0, 5).join(', ')}` : ''}`);
   if (Date.now() - loadStart > LOAD_LIMIT) {
     await page.screenshot({ path: 'bobble-debug.png' }).catch(() => {});
     throw new Error('Game did not finish loading. Screenshot saved to bobble-debug.png');
   }
 }
-console.log('Game loaded, starting the bot');
+console.log('Game loaded');
 if (!patched) throw new Error('game.js changed: tick hook not found, bot cannot attach');
 
-const authFound = await page.evaluate(() => {
-  const hasEth = typeof window.ethereum !== 'undefined';
-  const stored = Object.keys(localStorage).some(k => /auth|address|wallet/i.test(localStorage.getItem(k) || ''));
-  return hasEth || stored;
-});
-if (authFound) throw new Error('Wallet/auth detected — guest bot refuses to run');
+const readAuth = () => page.evaluate(key => {
+  try {
+    const a = (JSON.parse(localStorage.getItem(key) || '{}') || {}).auth;
+    return a && a.address && !(a.expires && a.expires < Date.now()) ? a.address : null;
+  } catch { return null; }
+}, STORAGE_KEY);
 
-const results = [];
-for (let i = 0; i < RUNS; i++) {
-  await page.evaluate(() => { globalThis.__guestBot = true; });
-  const startBtn = i === 0 ? '#btn-play' : '#btn-again';
-  await page.waitForSelector(`${startBtn}:visible`, { timeout: 60_000 });
+if (ONLINE) {
+  let address = await readAuth();
+  if (!address) {
+    console.log('\n=== Sign in once in the browser window ===');
+    console.log('1. First time only: install your wallet extension (MetaMask / Rabby / Coinbase) in THIS browser window.');
+    console.log('2. Reload the game tab, open the save kit (wallet button), connect the wallet and sign the message.');
+    console.log('3. Finish the X steps the game asks for. The bot starts by itself after sign-in.\n');
+    let lastNote = 0;
+    while (!(address = await readAuth())) {
+      if (Date.now() - lastNote > 60_000) { console.log('waiting for wallet sign-in...'); lastNote = Date.now(); }
+      await page.waitForTimeout(3000);
+    }
+  }
+  console.log(`Signed in as ${address.slice(0, 6)}…${address.slice(-4)}`);
+  await page.waitForSelector('html.is-ready', { state: 'attached', timeout: 240_000 });
+} else {
+  const authFound = await page.evaluate(() => typeof window.ethereum !== 'undefined');
+  if (authFound || await readAuth()) throw new Error('Wallet/auth detected — guest mode refuses to run (use --online)');
+}
+
+async function clickWhenVisible(selector) {
+  await page.waitForSelector(`${selector}:visible`, { timeout: 120_000 });
   // Boot overlay intercepts pointer events until loading finishes.
   await page.waitForFunction(() => {
     const b = document.getElementById('boot');
@@ -169,30 +228,60 @@ for (let i = 0; i < RUNS; i++) {
     const cs = getComputedStyle(b);
     return b.hidden || cs.display === 'none' || cs.pointerEvents === 'none' || cs.opacity === '0';
   }, null, { timeout: 60_000 }).catch(() => {});
-  await page.click(startBtn, { force: true });
+  await page.click(selector, { force: true });
+}
+
+const results = [];
+for (let i = 0; RUNS === 0 || i < RUNS; i++) {
+  await page.evaluate(() => { globalThis.__guestBot = true; });
+  const again = await page.$('#btn-again:visible');
+  await clickWhenVisible(again ? '#btn-again' : '#btn-play');
+  lastRunResponse = null;
   const t0 = Date.now();
   let lastLog = 0;
-  // Game over screen shows #btn-again; poll live state meanwhile.
+  let released = false;
+  let st;
   for (;;) {
-    const st = await page.evaluate(() => {
+    st = await page.evaluate(() => {
       const s = globalThis.__guestState || {};
-      const again = document.querySelector('#btn-again');
-      return { score: s.score, coins: s.coins, distance: s.distance, cause: s.cause,
-        over: !!again && again.offsetParent !== null };
+      const a = document.querySelector('#btn-again');
+      return { score: s.score, coins: s.coins, distance: Math.round(s.distance || 0), over: !!a && a.offsetParent !== null };
     });
     if (Date.now() - lastLog > 5000) {
-      console.log(`run ${i + 1}: score=${st.score} coins=${st.coins} dist=${Math.round(st.distance || 0)}`);
+      console.log(`run ${i + 1}: score=${st.score} coins=${st.coins} dist=${st.distance}`);
       lastLog = Date.now();
       if (SHOT) await page.screenshot({ path: `${SHOT}-${i + 1}.png` });
     }
-    if (st.over) { results.push(st); break; }
-    if (args.maxSeconds && Date.now() - t0 > Number(args.maxSeconds) * 1000) { results.push({ ...st, stopped: true }); break; }
+    if (st.over) break;
+    if (!released && MAX_RUN_MS && Date.now() - t0 > MAX_RUN_MS) {
+      // Stop steering so the run ends and is submitted while the game session is still valid.
+      console.log(`run ${i + 1}: reached ${MAX_RUN_MS / 60000} min, finishing the run so it can be saved`);
+      await page.evaluate(() => { globalThis.__guestBot = false; });
+      released = true;
+    }
+    if (!ONLINE && args.maxSeconds && Date.now() - t0 > Number(args.maxSeconds) * 1000) { st.stopped = true; break; }
     await page.waitForTimeout(500);
   }
-  console.log(`run ${i + 1} finished:`, results.at(-1));
+  if (ONLINE) {
+    const deadline = Date.now() + 60_000;
+    while (!lastRunResponse && Date.now() < deadline) await page.waitForTimeout(1000);
+    if (!lastRunResponse) console.log(`run ${i + 1}: no save response from the server (check the game window)`);
+    else {
+      const d = lastRunResponse.data || {};
+      const info = ['saved', 'score', 'coins', 'rank', 'tickets', 'best', 'error', 'code'].filter(k => d[k] !== undefined).map(k => `${k}=${d[k]}`).join(' ');
+      console.log(`run ${i + 1} saved: HTTP ${lastRunResponse.status} ${info}`);
+    }
+    await page.waitForTimeout(3000 + Math.random() * 4000);
+  }
+  results.push(st);
+  console.log(`run ${i + 1} finished: score=${st.score} coins=${st.coins} dist=${st.distance}${st.stopped ? ' (stopped by --maxSeconds)' : ''}`);
+  if (st.stopped) break;
 }
 
-console.log(`\nBlocked ${blocked.size} non-asset requests (nothing was sent to the leaderboard):`);
-for (const b of [...blocked].slice(0, 20)) console.log('  ', b);
+if (!ONLINE) {
+  console.log(`\nBlocked ${blocked.size} non-asset requests (nothing was sent to the leaderboard):`);
+  for (const b of [...blocked].slice(0, 20)) console.log('  ', b);
+}
 closing = true;
-await browser.close();
+await context.close();
+if (browser) await browser.close();

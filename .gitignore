@@ -1,3 +1,4 @@
 node_modules/
 *.png
 bobble-debug.png
+bobble-profile/
