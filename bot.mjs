@@ -5,11 +5,11 @@ import { chromium } from 'playwright';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
-const VERSION = 'v8';
+const VERSION = 'v9';
 console.log(`Bobble guest bot ${VERSION}, node ${process.version}, ${process.platform}`);
 const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
 const RUNS = Number(args.runs ?? 1);
-const HEADLESS = args.headed === undefined;
+const HEADLESS = !('headed' in args);
 const SHOT = args.screenshot; // optional path prefix for screenshots
 
 const blocked = new Set();
@@ -23,7 +23,7 @@ function isStaticAsset(url) {
 
 // Software WebGL only for GPU-less servers (Linux/headless); on a desktop it can crash the browser.
 const launchArgs = ['--autoplay-policy=no-user-gesture-required', '--disable-quic'];
-if (args.swiftshader !== undefined || (HEADLESS && process.platform === 'linux')) {
+if ('swiftshader' in args || (HEADLESS && process.platform === 'linux')) {
   launchArgs.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
 }
 // Accepts scheme://host:port, scheme://user:pass@host:port, or scheme://host:port:user:pass.
@@ -44,7 +44,7 @@ let browser;
 for (const channel of channels) {
   try {
     browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel, proxy: PROXY });
-    console.log(`Browser: ${channel || 'playwright chromium'}`);
+    console.log(`Browser: ${channel || 'playwright chromium'}, ${HEADLESS ? 'hidden (add --headed to see it)' : 'window visible'}`);
     break;
   } catch (e) {
     console.warn(`Could not start ${channel || 'playwright chromium'}: ${e.message.split('\n')[0]}`);
@@ -80,7 +80,7 @@ await context.route('**/*', async route => {
   }
   if (!/\/src\/run\/game\.js$/.test(new URL(url).pathname)) {
     // Some networks stall Chromium's own requests to Cloudflare while Node's work, so assets go through Node.
-    if (args.direct !== undefined) return route.continue();
+    if ('direct' in args) return route.continue();
     try {
       const res = await fetchViaNode(route, req);
       return route.fulfill({ status: res.status(), headers: cleanHeaders(res.headers()), body: await res.body() });
