@@ -5,6 +5,8 @@ import { chromium } from 'playwright';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
+const VERSION = 'v4';
+console.log(`Bobble guest bot ${VERSION}, node ${process.version}, ${process.platform}`);
 const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
 const RUNS = Number(args.runs ?? 1);
 const HEADLESS = args.headed === undefined;
@@ -55,8 +57,9 @@ await context.route('**/*', async route => {
   if (/\/src\/run\/game\.js$/.test(new URL(url).pathname)) {
     let res, body;
     try {
-      res = await route.fetch({ timeout: 60_000 });
+      res = await route.fetch({ timeout: 60_000, headers: { ...req.headers(), 'accept-encoding': 'identity' } });
       body = await res.text();
+      console.log(`game.js: HTTP ${res.status()}, ${body.length} chars, encoding=${res.headers()['content-encoding'] || 'none'}`);
     } catch (e) {
       console.error('Could not download game.js:', e.message.split('\n')[0]);
       return route.abort();
@@ -67,6 +70,9 @@ await context.route('**/*', async route => {
       body = body.replace(re, (_, t, e, x, z, s) =>
         `let ${t}=${e}?(globalThis.__guestBot?(globalThis.__guestState=${s},${z}.next(${s})):${x}.poll()):(globalThis.__guestState=${s},${z}.next(${s}));`);
       patched = true;
+    } else {
+      console.error('game.js: hook not found, start of file:', JSON.stringify(body.slice(0, 80)));
+      return route.continue();
     }
     // Body is already decoded and modified: original encoding/length headers would corrupt it.
     const headers = {};
@@ -82,6 +88,13 @@ await context.route('**/*', async route => {
 
 const page = await context.newPage();
 page.on('pageerror', e => console.error('[page error]', e.message));
+page.on('requestfailed', r => {
+  const u = r.url().split('?')[0];
+  if (!blocked.has(`${r.method()} ${u}`)) console.error('[request failed]', u, r.failure()?.errorText);
+});
+page.on('response', r => {
+  if (r.status() >= 400) console.error('[http error]', r.status(), r.url().split('?')[0]);
+});
 console.log('Opening the game...');
 await page.goto(URL_RUN, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 await page.waitForSelector('html.is-ready', { timeout: 120_000 });
