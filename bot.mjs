@@ -19,9 +19,29 @@ function isStaticAsset(url) {
   return u.pathname === '/run' || u.pathname.startsWith('/v/') || /\.(woff2?|ttf|png|jpe?g|webp|svg|glb|gltf|ktx2|mp3|ogg|wav|css|ico)$/.test(u.pathname);
 }
 
-const browser = await chromium.launch({
-  headless: HEADLESS,
-  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'],
+// Software WebGL only for GPU-less servers (Linux/headless); on a desktop it can crash the browser.
+const launchArgs = ['--autoplay-policy=no-user-gesture-required'];
+if (args.swiftshader !== undefined || (HEADLESS && process.platform === 'linux')) {
+  launchArgs.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
+}
+const channels = args.channel ? [args.channel]
+  : process.platform === 'win32' ? [undefined, 'msedge', 'chrome'] : [undefined, 'chrome'];
+let browser;
+for (const channel of channels) {
+  try {
+    browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel });
+    console.log(`Browser: ${channel || 'playwright chromium'}`);
+    break;
+  } catch (e) {
+    console.warn(`Could not start ${channel || 'playwright chromium'}: ${e.message.split('\n')[0]}`);
+  }
+}
+if (!browser) throw new Error('No browser could be started. Run: npx playwright install chromium');
+let closing = false;
+browser.on('disconnected', () => {
+  if (closing) return;
+  console.error('\nBrowser closed. Do not close the game window while the bot runs.');
+  process.exit(1);
 });
 const context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
 
@@ -49,8 +69,10 @@ await context.route('**/*', async route => {
 
 const page = await context.newPage();
 page.on('pageerror', e => console.error('[page error]', e.message));
-await page.goto(URL_RUN, { waitUntil: 'domcontentloaded' });
-await page.waitForSelector('html.is-ready', { timeout: 90_000 });
+console.log('Opening the game...');
+await page.goto(URL_RUN, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+await page.waitForSelector('html.is-ready', { timeout: 120_000 });
+console.log('Game loaded, starting the bot');
 if (!patched) throw new Error('game.js changed: tick hook not found, bot cannot attach');
 
 const authFound = await page.evaluate(() => {
@@ -97,4 +119,5 @@ for (let i = 0; i < RUNS; i++) {
 
 console.log(`\nBlocked ${blocked.size} non-asset requests (nothing was sent to the leaderboard):`);
 for (const b of [...blocked].slice(0, 20)) console.log('  ', b);
+closing = true;
 await browser.close();
