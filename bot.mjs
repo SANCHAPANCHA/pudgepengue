@@ -6,11 +6,12 @@
 // The bot never touches wallet keys: you sign in manually in the browser window.
 import { chromium } from 'playwright';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
 const STORAGE_KEY = 'bobble.run.v1';
-const VERSION = 'v10';
+const VERSION = 'v11';
 const args = Object.fromEntries(process.argv.slice(2).map(a => {
   const [k, ...v] = a.replace(/^--/, '').split('=');
   return [k, v.length ? v.join('=') : true];
@@ -99,14 +100,45 @@ function cleanHeaders(h) {
 
 // Some networks stall Chromium's own requests to Cloudflare while Node's work, so game traffic goes through Node.
 async function fetchViaNode(route, req) {
-  return route.fetch({ timeout: 60_000, maxRetries: req.method() === 'GET' ? 2 : 0, headers: { ...req.headers(), 'accept-encoding': 'identity' } });
+  return route.fetch({ timeout: 180_000, maxRetries: req.method() === 'GET' ? 2 : 0, headers: { ...req.headers(), 'accept-encoding': 'identity' } });
+}
+
+// /v/<build-hash>/ assets are immutable, so a disk cache makes later launches fast on slow links.
+const CACHE_DIR = path.resolve('bobble-cache');
+function cachePath(u) {
+  if (!u.pathname.startsWith('/v/') || u.search) return null;
+  return path.join(CACHE_DIR, ...u.pathname.split('/').filter(Boolean));
+}
+async function readCache(u) {
+  const p = cachePath(u);
+  if (!p) return null;
+  try { return { body: await fs.readFile(p), headers: JSON.parse(await fs.readFile(p + '.headers.json', 'utf8')) }; } catch { return null; }
+}
+async function writeCache(u, headers, body) {
+  const p = cachePath(u);
+  if (!p) return;
+  try {
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, body);
+    await fs.writeFile(p + '.headers.json', JSON.stringify(headers));
+  } catch {}
 }
 
 async function passThroughNode(route, req) {
   if ('direct' in args) return route.continue();
+  const u = new URL(req.url());
+  if (req.method() === 'GET') {
+    const hit = await readCache(u);
+    if (hit) return route.fulfill({ status: 200, headers: hit.headers, body: hit.body });
+  }
   try {
+    const t0 = Date.now();
     const res = await fetchViaNode(route, req);
-    return route.fulfill({ status: res.status(), headers: cleanHeaders(res.headers()), body: await res.body() });
+    const body = await res.body();
+    const headers = cleanHeaders(res.headers());
+    if (req.method() === 'GET' && res.status() === 200) await writeCache(u, headers, body);
+    if (Date.now() - t0 > 10_000) console.log(`loaded ${u.pathname.split('/').pop()} (${Math.round(body.length / 1024)} KB) in ${Math.round((Date.now() - t0) / 1000)}s`);
+    return route.fulfill({ status: res.status(), headers, body });
   } catch (e) {
     console.error('[request failed via node]', req.method(), req.url().split('?')[0], e.message.split('\n')[0]);
     return route.abort().catch(() => {});
