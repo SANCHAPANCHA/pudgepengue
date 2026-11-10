@@ -3,6 +3,7 @@
 Autoplays https://unboxbobble.com/run in **guest mode only**: dodges obstacles and collects coins.
 
 ```bash
+# requires Node.js 20+
 npm install
 npx playwright install chromium
 npm run bot                       # 1 run, headless

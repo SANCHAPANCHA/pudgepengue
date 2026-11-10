@@ -21,5 +21,8 @@
   "homepage": "https://github.com/SANCHAPANCHA/pudgepengue#readme",
   "devDependencies": {
     "playwright": "^1.65.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
