@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
-const VERSION = 'v7';
+const VERSION = 'v8';
 console.log(`Bobble guest bot ${VERSION}, node ${process.version}, ${process.platform}`);
 const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
 const RUNS = Number(args.runs ?? 1);
@@ -26,12 +26,24 @@ const launchArgs = ['--autoplay-policy=no-user-gesture-required', '--disable-qui
 if (args.swiftshader !== undefined || (HEADLESS && process.platform === 'linux')) {
   launchArgs.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
 }
+// Accepts scheme://host:port, scheme://user:pass@host:port, or scheme://host:port:user:pass.
+function parseProxy(raw) {
+  if (!raw) return undefined;
+  const m = /^(?:(\w+):\/\/)?([^:@/]+):(\d+):([^:]+):(.+)$/.exec(raw);
+  if (m) return { server: `${m[1] || 'http'}://${m[2]}:${m[3]}`, username: m[4], password: m[5] };
+  const u = new URL(raw.includes('://') ? raw : `http://${raw}`);
+  const p = { server: `${u.protocol}//${u.host}` };
+  if (u.username) { p.username = decodeURIComponent(u.username); p.password = decodeURIComponent(u.password); }
+  return p;
+}
+const PROXY = parseProxy(args.proxy || process.env.BOBBLE_PROXY);
+if (PROXY) console.log(`Proxy: ${PROXY.server}${PROXY.username ? ' (with login)' : ''}`);
 const channels = args.channel ? [args.channel]
   : process.platform === 'win32' ? [undefined, 'msedge', 'chrome'] : [undefined, 'chrome'];
 let browser;
 for (const channel of channels) {
   try {
-    browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel, proxy: args.proxy ? { server: args.proxy } : undefined });
+    browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel, proxy: PROXY });
     console.log(`Browser: ${channel || 'playwright chromium'}`);
     break;
   } catch (e) {
