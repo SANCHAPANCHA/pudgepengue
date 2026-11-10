@@ -53,8 +53,14 @@ await context.route('**/*', async route => {
     return route.abort();
   }
   if (/\/src\/run\/game\.js$/.test(new URL(url).pathname)) {
-    const res = await route.fetch();
-    let body = await res.text();
+    let res, body;
+    try {
+      res = await route.fetch({ timeout: 60_000 });
+      body = await res.text();
+    } catch (e) {
+      console.error('Could not download game.js:', e.message.split('\n')[0]);
+      return route.abort();
+    }
     // Main tick: `let t=isRun?input.poll():demoBot.next(state);` -> let the built-in bot drive guest runs too.
     const re = /let (\w+)=(\w+)\?(\w+)\.poll\(\):(\w+)\.next\((\w+)\);/;
     if (re.test(body)) {
@@ -62,7 +68,14 @@ await context.route('**/*', async route => {
         `let ${t}=${e}?(globalThis.__guestBot?(globalThis.__guestState=${s},${z}.next(${s})):${x}.poll()):(globalThis.__guestState=${s},${z}.next(${s}));`);
       patched = true;
     }
-    return route.fulfill({ response: res, body, headers: { ...res.headers(), 'content-type': 'text/javascript' } });
+    // Body is already decoded and modified: original encoding/length headers would corrupt it.
+    const headers = {};
+    for (const [k, v] of Object.entries(res.headers())) {
+      if (!/^(content-encoding|content-length|transfer-encoding|etag|last-modified)$/i.test(k)) headers[k] = v;
+    }
+    headers['content-type'] = 'text/javascript; charset=utf-8';
+    headers['cache-control'] = 'no-store';
+    return route.fulfill({ status: res.status(), headers, body });
   }
   return route.continue();
 });
