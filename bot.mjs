@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
-const VERSION = 'v6';
+const VERSION = 'v7';
 console.log(`Bobble guest bot ${VERSION}, node ${process.version}, ${process.platform}`);
 const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
 const RUNS = Number(args.runs ?? 1);
@@ -31,7 +31,7 @@ const channels = args.channel ? [args.channel]
 let browser;
 for (const channel of channels) {
   try {
-    browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel });
+    browser = await chromium.launch({ headless: HEADLESS, args: launchArgs, channel, proxy: args.proxy ? { server: args.proxy } : undefined });
     console.log(`Browser: ${channel || 'playwright chromium'}`);
     break;
   } catch (e) {
