@@ -1,0 +1,25 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "bot": "node bot.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SANCHAPANCHA/pudgepengue.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/SANCHAPANCHA/pudgepengue/issues"
+  },
+  "homepage": "https://github.com/SANCHAPANCHA/pudgepengue#readme",
+  "devDependencies": {
+    "playwright": "^1.65.0"
+  }
+}
