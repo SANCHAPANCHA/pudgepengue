@@ -72,7 +72,7 @@
 <main>
   <div class="bar">
     <div class="group grow">
-      <label class="cap" for="proxy">Прокси (общий для всех профилей)</label>
+      <label class="cap" for="proxy">Общий прокси (для профилей без своего)</label>
       <input id="proxy" type="password" placeholder="http://адрес:порт:логин:пароль — пусто = без прокси" autocomplete="off">
       <div class="muted" id="proxyNow" style="font-size:12px"></div>
     </div>
@@ -140,6 +140,8 @@ function makeCard(p) {
     </div>
     <div class="progress" title="Прогресс до лимита"><div></div></div>
     <div class="limits">
+      <div class="group" style="display:flex;flex-direction:column;gap:6px;grid-column:1/3"><label class="cap">Прокси профиля</label><input type="password" data-l="proxy" autocomplete="off" placeholder="http://адрес:порт:логин:пароль"><div class="muted" data-k="proxyNow" style="font-size:12px"></div></div>
+      <button data-a="proxy" style="align-self:start;margin-top:22px">Сохранить прокси</button>
       <div class="group" style="display:flex;flex-direction:column;gap:6px"><label class="cap">Стоп на очках</label><input type="number" min="0" step="1" data-l="stopScore" placeholder="без лимита"></div>
       <div class="group" style="display:flex;flex-direction:column;gap:6px"><label class="cap">Стоп на монетах</label><input type="number" min="0" step="1" data-l="stopCoins" placeholder="без лимита"></div>
       <button data-a="limits">Применить</button>
@@ -161,10 +163,18 @@ function makeCard(p) {
   el.querySelector('[data-l=stopScore]').value = p.stopScore || '';
   el.querySelector('[data-l=stopCoins]').value = p.stopCoins || '';
   el.querySelector('[data-l=autoContinue]').checked = !!p.autoContinue;
+  el.querySelector('[data-k=proxyNow]').textContent = p.proxyMasked ? 'Сейчас: ' + p.proxyMasked : 'Сейчас: общий прокси';
   el.addEventListener('click', async e => {
     const a = e.target.closest('button')?.dataset.a;
     if (!a) return;
     const base = `/api/bot/${encodeURIComponent(p.name)}/`;
+    if (a === 'proxy') {
+      const v = el.querySelector('[data-l=proxy]').value.trim();
+      if (!v && !confirm('Поле пустое: профиль будет использовать общий прокси. Продолжить?')) return;
+      const r = await api(base + 'proxy', { proxy: v });
+      if (r.ok) { el.querySelector('[data-l=proxy]').value = ''; toastOk('Прокси профиля сохранён. Применится при следующем запуске бота.'); load(); }
+      return;
+    }
     if (a === 'limits') {
       await api(base + 'limits', {
         stopScore: el.querySelector('[data-l=stopScore]').value,
