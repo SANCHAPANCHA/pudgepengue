@@ -8,6 +8,17 @@ npm install
 npx playwright install chromium
 ```
 
+## Control panel (recommended)
+
+```bash
+npm run ui            # or double-click start-panel.bat on Windows
+```
+
+Opens http://127.0.0.1:5577 (only reachable from this computer). There you add profiles, set the proxy
+(shared by all profiles) and per-profile score/coin limits, and use Start / Pause after run / Resume /
+End run / Stop buttons with live score, coins and save results. Settings are stored in `bobble-ui.json`
+(contains the proxy password: do not share it). `npm run ui -- --guest` runs a demo without a wallet.
+
 ## Guest mode (default): nothing is saved
 
 ```bash

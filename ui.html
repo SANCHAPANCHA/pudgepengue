@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bobble Run · панель бота</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a; --text: #e8eaf0; --muted: #8a92a6;
+    --accent: #ffcc33; --green: #3ecf8e; --red: #ff5d5d; --blue: #5aa9ff; --orange: #ff9f43;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 18px 28px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
+  header .logo { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: #111; display: grid; place-items: center; font-weight: 800; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main { padding: 22px 28px 40px; max-width: 1400px; margin: 0 auto; }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin-bottom: 22px; }
+  .bar .group { display: flex; flex-direction: column; gap: 6px; }
+  .bar .grow { flex: 1; min-width: 260px; }
+  label.cap { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  input[type=text], input[type=number], input[type=password] {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font: inherit; width: 100%;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel2); color: var(--text); border-radius: 9px; padding: 9px 14px; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .35; cursor: default; }
+  button.primary { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+  button.green { background: #1f3b2f; border-color: #2c6b4f; color: var(--green); }
+  button.orange { background: #3a2c17; border-color: #6b4c22; color: var(--orange); }
+  button.red { background: #3a1d1d; border-color: #6b2c2c; color: var(--red); }
+  button.ghost { background: transparent; }
+  .muted { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .card .top { display: flex; align-items: center; gap: 10px; }
+  .card .name { font-size: 17px; font-weight: 700; }
+  .card .folder { font-size: 12px; color: var(--muted); }
+  .badge { margin-left: auto; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+  .badge.run { color: var(--green); border-color: #2c6b4f; background: #16291f; }
+  .badge.wait { color: var(--blue); border-color: #2b4f75; background: #152231; }
+  .badge.pause { color: var(--orange); border-color: #6b4c22; background: #2b2113; }
+  .badge.err { color: var(--red); border-color: #6b2c2c; background: #2b1515; }
+  .hint { font-size: 13px; padding: 9px 12px; border-radius: 10px; background: #152231; color: #bcd8ff; border: 1px solid #2b4f75; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stat { background: var(--panel2); border-radius: 10px; padding: 9px 10px; }
+  .stat .v { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .progress { height: 6px; background: var(--panel2); border-radius: 99px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .limits { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .save { font-size: 13px; }
+  .save.ok { color: var(--green); } .save.bad { color: var(--red); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre.log { margin: 8px 0 0; background: #0b0d11; border: 1px solid var(--line); border-radius: 10px; padding: 10px; height: 200px; overflow: auto; font: 12px/1.45 ui-monospace, Consolas, monospace; color: #b9c0d0; white-space: pre-wrap; }
+  .empty { color: var(--muted); padding: 30px; text-align: center; }
+  .toast { position: fixed; right: 20px; bottom: 20px; background: #3a1d1d; color: #ffd0d0; border: 1px solid #6b2c2c; padding: 10px 14px; border-radius: 10px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">B</div>
+  <div>
+    <h1>Bobble Run · панель бота</h1>
+    <div class="sub">Каждый профиль — отдельное окно Chrome со своим кошельком. Не закрывайте окно терминала с панелью.</div>
+  </div>
+</header>
+<main>
+  <div class="bar">
+    <div class="group grow">
+      <label class="cap" for="proxy">Прокси (общий для всех профилей)</label>
+      <input id="proxy" type="password" placeholder="http://адрес:порт:логин:пароль — пусто = без прокси" autocomplete="off">
+      <div class="muted" id="proxyNow" style="font-size:12px"></div>
+    </div>
+    <button id="proxySave" class="primary">Сохранить прокси</button>
+    <div class="group" style="min-width:220px">
+      <label class="cap" for="newName">Новый профиль</label>
+      <input id="newName" type="text" placeholder="например 2 или alice">
+    </div>
+    <button id="addProfile">Добавить профиль</button>
+  </div>
+  <div class="grid" id="grid"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const STATES = {
+  stopped: ['Остановлен', ''], starting: ['Запуск…', 'wait'], loading: ['Загрузка игры', 'wait'],
+  metamask: ['Установите MetaMask', 'wait'], signin: ['Войдите в кошелёк в игре', 'wait'],
+  running: ['Бежит', 'run'], finishing: ['Завершает забег', 'pause'], saving: ['Сохраняет забег', 'wait'],
+  pausing: ['Пауза после забега', 'pause'], paused: ['Пауза', 'pause'], stopping: ['Останавливается', 'wait'],
+  error: ['Ошибка', 'err'],
+};
+const HINTS = {
+  metamask: 'В окне Chrome нажмите «Установить» на странице MetaMask и создайте/импортируйте кошелёк.',
+  signin: 'В окне игры откройте кнопку кошелька, подключите MetaMask, подпишите сообщение и пройдите шаги в X. Бот начнёт сам.',
+  paused: 'Забег сохранён. Можно поменять лимиты и нажать «Продолжить».',
+  error: 'Бот завершился с ошибкой — смотрите журнал ниже.',
+};
+let state = { settings: { profiles: [] }, bots: {} };
+const cards = new Map();
+
+async function api(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-bobble': '1' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) toast(j.error || 'Ошибка');
+  return j;
+}
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 4000);
+}
+const fmt = n => (n || 0).toLocaleString('ru-RU');
+const short = a => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
+function dur(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+
+function makeCard(p) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.innerHTML = `
+    <div class="top">
+      <div><div class="name"></div><div class="folder"></div></div>
+      <span class="badge"></span>
+    </div>
+    <div class="hint" hidden></div>
+    <div class="stats">
+      <div class="stat"><div class="v" data-k="run">—</div><div class="k">Забег №</div></div>
+      <div class="stat"><div class="v" data-k="score">0</div><div class="k">Очки</div></div>
+      <div class="stat"><div class="v" data-k="coins">0</div><div class="k">Монеты</div></div>
+      <div class="stat"><div class="v" data-k="time">0:00</div><div class="k">Время</div></div>
+      <div class="stat"><div class="v" data-k="runsDone">0</div><div class="k">Забегов</div></div>
+      <div class="stat"><div class="v" data-k="savedOk">0</div><div class="k">Сохранено</div></div>
+      <div class="stat"><div class="v" data-k="best">0</div><div class="k">Лучший</div></div>
+      <div class="stat"><div class="v" data-k="account" style="font-size:14px">—</div><div class="k">Кошелёк</div></div>
+    </div>
+    <div class="progress" title="Прогресс до лимита"><div></div></div>
+    <div class="limits">
+      <div class="group" style="display:flex;flex-direction:column;gap:6px"><label class="cap">Стоп на очках</label><input type="number" min="0" step="1" data-l="stopScore" placeholder="без лимита"></div>
+      <div class="group" style="display:flex;flex-direction:column;gap:6px"><label class="cap">Стоп на монетах</label><input type="number" min="0" step="1" data-l="stopCoins" placeholder="без лимита"></div>
+      <button data-a="limits">Применить</button>
+    </div>
+    <label class="check"><input type="checkbox" data-l="autoContinue"> После лимита сам начинать следующий забег</label>
+    <div class="muted" style="font-size:12px;margin-top:-8px">Пусто или 0 — без лимита. Если заданы оба, сработает тот, что наступит раньше.</div>
+    <div class="buttons">
+      <button class="primary" data-a="start">▶ Запустить</button>
+      <button class="orange" data-a="pause">⏸ Пауза после забега</button>
+      <button class="green" data-a="resume">▶ Продолжить</button>
+      <button data-a="release">⏹ Закончить забег</button>
+      <button class="red" data-a="stop">✖ Остановить бота</button>
+      <button class="ghost" data-a="remove" title="Убрать из панели (папка профиля не удаляется)">Убрать</button>
+    </div>
+    <div class="save muted"></div>
+    <details><summary>Журнал</summary><pre class="log"></pre></details>`;
+  el.querySelector('.name').textContent = p.name;
+  el.querySelector('.folder').textContent = 'папка: ' + (p.name === 'main' ? 'bobble-profile' : 'profile-' + p.name);
+  el.querySelector('[data-l=stopScore]').value = p.stopScore || '';
+  el.querySelector('[data-l=stopCoins]').value = p.stopCoins || '';
+  el.querySelector('[data-l=autoContinue]').checked = !!p.autoContinue;
+  el.addEventListener('click', async e => {
+    const a = e.target.closest('button')?.dataset.a;
+    if (!a) return;
+    const base = `/api/bot/${encodeURIComponent(p.name)}/`;
+    if (a === 'limits') {
+      await api(base + 'limits', {
+        stopScore: el.querySelector('[data-l=stopScore]').value,
+        stopCoins: el.querySelector('[data-l=stopCoins]').value,
+        autoContinue: el.querySelector('[data-l=autoContinue]').checked,
+      });
+      toastOk('Лимиты сохранены');
+    } else if (a === 'start') {
+      await api(base + 'limits', {
+        stopScore: el.querySelector('[data-l=stopScore]').value,
+        stopCoins: el.querySelector('[data-l=stopCoins]').value,
+        autoContinue: el.querySelector('[data-l=autoContinue]').checked,
+      });
+      await api(base + 'start');
+    } else if (a === 'stop') {
+      if (confirm('Остановить бота? Незаконченный забег не сохранится — лучше сначала «Закончить забег».')) await api(base + 'stop');
+    } else if (a === 'remove') {
+      if (confirm('Убрать профиль из панели? Папка с кошельком останется на диске.')) { await api(base + 'remove'); load(); }
+    } else {
+      await api(base + 'cmd', { cmd: a });
+    }
+  });
+  el.querySelector('[data-l=autoContinue]').addEventListener('change', () => el.querySelector('[data-a=limits]').click());
+  return el;
+}
+function toastOk(msg) {
+  const t = document.getElementById('toast');
+  t.style.background = '#16291f'; t.style.borderColor = '#2c6b4f'; t.style.color = '#c9f5df';
+  toast(msg);
+  setTimeout(() => { t.style.background = ''; t.style.borderColor = ''; t.style.color = ''; }, 4100);
+}
+
+function render(name) {
+  const c = cards.get(name);
+  const b = state.bots[name] || { state: 'stopped', logs: [] };
+  if (!c) return;
+  const [label, cls] = STATES[b.state] || [b.state, ''];
+  const badge = c.querySelector('.badge');
+  badge.textContent = label; badge.className = 'badge ' + cls;
+  const hint = c.querySelector('.hint');
+  hint.hidden = !HINTS[b.state]; hint.textContent = HINTS[b.state] || '';
+  const set = (k, v) => c.querySelector(`[data-k=${k}]`).textContent = v;
+  set('run', b.run || '—'); set('score', fmt(b.score)); set('coins', fmt(b.coins));
+  set('runsDone', fmt(b.runsDone)); set('savedOk', fmt(b.savedOk)); set('best', fmt(b.best));
+  set('account', short(b.account) || '—');
+  const live = ['running', 'finishing', 'pausing'].includes(b.state) && b.startedAt;
+  set('time', live ? dur(Date.now() - b.startedAt) : '0:00');
+  const lim = b.limits || {};
+  const ratios = [];
+  if (lim.score || lim.stopScore) ratios.push((b.score || 0) / (lim.score || lim.stopScore));
+  if (lim.coins || lim.stopCoins) ratios.push((b.coins || 0) / (lim.coins || lim.stopCoins));
+  c.querySelector('.progress > div').style.width = (ratios.length && live ? Math.min(100, Math.max(...ratios) * 100) : 0) + '%';
+  const run = !!b.running;
+  const btn = a => c.querySelector(`[data-a=${a}]`);
+  btn('start').disabled = run;
+  btn('pause').disabled = !run || ['paused', 'pausing'].includes(b.state);
+  btn('resume').disabled = !run || !['paused', 'pausing'].includes(b.state);
+  btn('release').disabled = !run || !['running', 'pausing'].includes(b.state);
+  btn('stop').disabled = !run;
+  btn('remove').disabled = run;
+  const save = c.querySelector('.save');
+  if (b.lastSave) {
+    save.className = 'save ' + (b.lastSave.ok ? 'ok' : 'bad');
+    save.textContent = `Забег ${b.lastSave.run}: ${b.lastSave.ok ? 'сохранён' : 'не сохранён'} — ${b.lastSave.info || ''}`;
+  } else { save.className = 'save muted'; save.textContent = 'Сохранённых забегов пока нет'; }
+}
+function appendLog(name, line) {
+  const pre = cards.get(name)?.querySelector('pre.log');
+  if (!pre) return;
+  const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+  pre.textContent += line + '\n';
+  if (pre.textContent.length > 60000) pre.textContent = pre.textContent.slice(-40000);
+  if (atBottom) pre.scrollTop = pre.scrollHeight;
+}
+
+async function load() {
+  state = await (await fetch('/api/state')).json();
+  const grid = document.getElementById('grid');
+  grid.innerHTML = ''; cards.clear();
+  if (!state.settings.profiles.length) grid.innerHTML = '<div class="empty">Добавьте первый профиль сверху.</div>';
+  for (const p of state.settings.profiles) {
+    const el = makeCard(p);
+    cards.set(p.name, el); grid.appendChild(el);
+    render(p.name);
+    const logs = (state.bots[p.name] || {}).logs || [];
+    el.querySelector('pre.log').textContent = logs.join('\n') + (logs.length ? '\n' : '');
+  }
+  document.getElementById('proxyNow').textContent = state.settings.hasProxy ? 'Сейчас: ' + state.settings.proxy : 'Сейчас: без прокси';
+}
+
+document.getElementById('proxySave').onclick = async () => {
+  const v = document.getElementById('proxy').value.trim();
+  if (!v && !confirm('Поле пустое — убрать прокси?')) return;
+  await api('/api/proxy', { proxy: v });
+  document.getElementById('proxy').value = '';
+  await load();
+  toastOk('Прокси сохранён. Применится при следующем запуске бота.');
+};
+document.getElementById('addProfile').onclick = async () => {
+  const name = document.getElementById('newName').value.trim();
+  const r = await api('/api/profiles/add', { name });
+  if (r.ok) { document.getElementById('newName').value = ''; load(); }
+};
+
+const es = new EventSource('/api/events');
+es.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.type === 'bot') { state.bots[m.name] = m.bot; render(m.name); }
+  else if (m.type === 'log') appendLog(m.name, m.line);
+};
+es.onerror = () => toast('Нет связи с панелью — окно терминала закрыто?');
+setInterval(() => { for (const n of cards.keys()) render(n); }, 1000);
+load();
+</script>
+</body>
+</html>

@@ -12,7 +12,7 @@ import readline from 'node:readline/promises';
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
 const STORAGE_KEY = 'bobble.run.v1';
-const VERSION = 'v14';
+const VERSION = 'v15';
 const args = Object.fromEntries(process.argv.slice(2).map(a => {
   const [k, ...v] = a.replace(/^--/, '').split('=');
   return [k, v.length ? v.join('=') : true];
@@ -85,6 +85,23 @@ if (ONLINE) {
 if (!context) throw new Error('No browser could be started. Run: npx playwright install chromium');
 
 let closing = false;
+// When started from the UI panel (ui.mjs) the bot reports its state and takes commands over IPC.
+const IPC = typeof process.send === 'function';
+const emit = msg => { if (IPC) try { process.send(msg); } catch {} };
+let onCommand = m => { if (m && m.cmd === 'quit') quit(); };
+if (IPC) {
+  process.on('message', m => onCommand(m));
+  process.on('disconnect', () => quit());
+}
+function quit() {
+  if (closing) return;
+  closing = true;
+  console.log('Stopping...');
+  emit({ type: 'state', state: 'stopping' });
+  context.close().catch(() => {}).finally(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5000);
+}
+
 context.on('close', () => {
   if (closing) return;
   console.error('\nBrowser closed. Do not close the game window while the bot runs.');
@@ -207,6 +224,7 @@ page.on('requestfinished', r => pending.delete(r));
 page.on('requestfailed', r => pending.delete(r));
 
 console.log('Opening the game...');
+emit({ type: 'state', state: 'loading' });
 await page.goto(URL_RUN, { waitUntil: 'commit', timeout: 90_000 });
 const LOAD_LIMIT = Number(args.loadSeconds ?? 240) * 1000;
 const loadStart = Date.now();
@@ -247,6 +265,7 @@ if (ONLINE) {
     // Give MetaMask a moment to start its service worker if it is already in the profile.
     await sleep(3000);
     if (!metamaskInstalled()) {
+      emit({ type: 'state', state: 'metamask' });
       console.log('\nMetaMask is not installed in this profile yet: opening its Chrome Web Store page.');
       console.log('Click "Install", then create or import a wallet (use a separate wallet without large funds).');
       const store = await context.newPage();
@@ -265,6 +284,7 @@ if (ONLINE) {
       await page.reload({ waitUntil: 'commit', timeout: 90_000 }).catch(() => {});
       await page.waitForSelector('html.is-ready', { state: 'attached', timeout: 240_000 }).catch(() => {});
     }
+    emit({ type: 'state', state: 'signin' });
     console.log('\n=== Sign in once in the game tab ===');
     console.log('Open the save kit (wallet button), connect MetaMask, sign the message and finish the X steps.');
     console.log('The bot starts by itself after sign-in. Reloading the page is safe.\n');
@@ -274,6 +294,7 @@ if (ONLINE) {
       await sleep(3000);
     }
   }
+  emit({ type: 'account', address });
   console.log(`Signed in as ${address.slice(0, 6)}…${address.slice(-4)} (saved in the profile, next launches start right away)`);
   await page.bringToFront().catch(() => {});
   await page.waitForSelector('html.is-ready', { state: 'attached', timeout: 240_000 });
@@ -303,33 +324,61 @@ for (const ev of ['uncaughtException', 'unhandledRejection']) {
   });
 }
 
-// Terminal hotkeys: L = let the current run end (it is saved as usual), P = pause/resume between runs,
-// S = set new score/coin limits while paused.
+// Run control, shared by terminal hotkeys and the UI panel (ui.mjs talks to the bot over IPC).
 let releaseRequested = false;
 let paused = false;
 let editLimits = false;
 let prompting = false;
-// 0 = no limit. When reached, the bot lets the run end and pauses so the next run can be set up.
-const limits = { score: Number(args.stopScore || 0), coins: Number(args.stopCoins || 0) };
-const fmtLimits = () => `score ${limits.score || 'no limit'}, coins ${limits.coins || 'no limit'}`;
+// 0 = no limit. When reached, the bot lets the run end, then pauses unless autoContinue is on.
+const limits = {
+  score: Number(args.stopScore || 0),
+  coins: Number(args.stopCoins || 0),
+  autoContinue: 'autoContinue' in args,
+};
+const fmtLimits = () => `score ${limits.score || 'no limit'}, coins ${limits.coins || 'no limit'}${limits.autoContinue ? ', auto-continue' : ''}`;
+const interactive = process.stdin.isTTY || IPC;
+
+function command(m) {
+  switch (m && m.cmd) {
+    case 'release':
+      releaseRequested = true;
+      console.log('[end run] releasing control: the character will crash and the run will end');
+      break;
+    case 'pause':
+      paused = true;
+      console.log('[pause] no new run will start until resumed');
+      emit({ type: 'state', state: 'pausing' });
+      break;
+    case 'resume':
+      paused = false;
+      console.log('[resume]');
+      break;
+    case 'setLimits':
+      for (const k of ['score', 'coins']) {
+        const n = Number(m[k]);
+        if (m[k] !== undefined && Number.isFinite(n) && n >= 0) limits[k] = Math.floor(n);
+      }
+      if (m.autoContinue !== undefined) limits.autoContinue = !!m.autoContinue;
+      console.log(`Run limits: ${fmtLimits()}`);
+      emit({ type: 'limits', limits });
+      break;
+    case 'quit':
+      quit();
+      break;
+  }
+}
+onCommand = command;
+
 if (process.stdin.isTTY) {
   process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.on('data', async buf => {
+  process.stdin.on('data', buf => {
     if (prompting) return;
     const k = buf.toString().toLowerCase();
-    if (k === '\u0003') { // Ctrl+C is not delivered as a signal in raw mode
-      closing = true;
-      console.log('\nStopping...');
-      context.close().catch(() => {}).finally(() => process.exit(0));
-      setTimeout(() => process.exit(0), 5000);
-    } else if (k === 'l') {
-      releaseRequested = true;
-      console.log('[L] releasing control: the character will crash and the run will end');
-    } else if (k === 'p') {
-      paused = !paused;
-      console.log(paused ? '[P] paused: no new run will start until you press P again' : '[P] resumed');
-    } else if (k === 's') {
+    if (k === '\u0003') quit(); // Ctrl+C is not delivered as a signal in raw mode
+    else if (k === 'l') command({ cmd: 'release' });
+    else if (k === 'p') command({ cmd: paused ? 'resume' : 'pause' });
+    else if (k === 's') {
       if (paused) editLimits = true;
       else console.log('[S] press P first to pause, then S to change the limits');
     }
@@ -337,6 +386,7 @@ if (process.stdin.isTTY) {
   console.log('Keys: L = end the current run now, P = pause/resume between runs, S = change limits (while paused), Ctrl+C = quit');
 }
 console.log(`Run limits: ${fmtLimits()}`);
+emit({ type: 'limits', limits });
 
 async function askLimits() {
   prompting = true;
@@ -359,7 +409,8 @@ async function askLimits() {
 const results = [];
 for (let i = 0; RUNS === 0 || i < RUNS; i++) {
   if (paused) {
-    console.log('paused: press P to start the next run, S to change the limits first');
+    console.log(IPC ? 'paused: press "Resume" in the panel' : 'paused: press P to start the next run, S to change the limits first');
+    emit({ type: 'state', state: 'paused', run: i });
     while (paused) {
       if (editLimits) {
         editLimits = false;
@@ -393,6 +444,7 @@ for (let i = 0; RUNS === 0 || i < RUNS; i++) {
       st = { score: 0, coins: 0, distance: 0, reloaded: true };
       break;
     }
+    emit({ type: 'state', state: released ? 'finishing' : paused ? 'pausing' : 'running', run: i + 1, score: st.score, coins: st.coins, distance: st.distance, startedAt: t0 });
     if (Date.now() - lastLog > 5000) {
       console.log(`run ${i + 1}: score=${st.score} coins=${st.coins} dist=${st.distance}`);
       lastLog = Date.now();
@@ -418,20 +470,25 @@ for (let i = 0; RUNS === 0 || i < RUNS; i++) {
     await page.waitForTimeout(500);
   }
   if (ONLINE && !st.reloaded) {
+    emit({ type: 'state', state: 'saving', run: i + 1, score: st.score, coins: st.coins, distance: st.distance });
     const deadline = Date.now() + 60_000;
     while (!lastRunResponse && Date.now() < deadline) await page.waitForTimeout(1000);
-    if (!lastRunResponse) console.log(`run ${i + 1}: no save response from the server (check the game window)`);
-    else {
+    if (!lastRunResponse) {
+      console.log(`run ${i + 1}: no save response from the server (check the game window)`);
+      emit({ type: 'saved', run: i + 1, ok: false, info: 'no save response' });
+    } else {
       const d = lastRunResponse.data || {};
       const info = ['saved', 'score', 'coins', 'rank', 'tickets', 'best', 'error', 'code'].filter(k => d[k] !== undefined).map(k => `${k}=${d[k]}`).join(' ');
       console.log(`run ${i + 1} saved: HTTP ${lastRunResponse.status} ${info}`);
+      emit({ type: 'saved', run: i + 1, ok: lastRunResponse.status < 400 && d.saved !== false, status: lastRunResponse.status, info });
     }
     await page.waitForTimeout(3000 + Math.random() * 4000);
   }
   results.push(st);
   console.log(`run ${i + 1} finished: score=${st.score} coins=${st.coins} dist=${st.distance}${st.stopped ? ' (stopped by --maxSeconds)' : ''}`);
+  emit({ type: 'finished', run: i + 1, score: st.score, coins: st.coins, distance: st.distance, limitHit });
   if (st.stopped) break;
-  if (limitHit && process.stdin.isTTY) paused = true;
+  if (limitHit && !limits.autoContinue && interactive) paused = true;
 }
 
 if (!ONLINE) {
