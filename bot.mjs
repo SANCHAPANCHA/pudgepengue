@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
 const STORAGE_KEY = 'bobble.run.v1';
-const VERSION = 'v11';
+const VERSION = 'v12';
 const args = Object.fromEntries(process.argv.slice(2).map(a => {
   const [k, ...v] = a.replace(/^--/, '').split('=');
   return [k, v.length ? v.join('=') : true];
@@ -224,27 +224,57 @@ for (;;) {
 console.log('Game loaded');
 if (!patched) throw new Error('game.js changed: tick hook not found, bot cannot attach');
 
+// Evaluate fails while the page reloads; treat that as "not known yet" instead of crashing the bot.
 const readAuth = () => page.evaluate(key => {
   try {
     const a = (JSON.parse(localStorage.getItem(key) || '{}') || {}).auth;
     return a && a.address && !(a.expires && a.expires < Date.now()) ? a.address : null;
   } catch { return null; }
-}, STORAGE_KEY);
+}, STORAGE_KEY).catch(() => null);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+const METAMASK_ID = 'nkbihfbeogaeaoehlefnkodbefgpgknn';
+const METAMASK_STORE = `https://chromewebstore.google.com/detail/metamask/${METAMASK_ID}`;
+const MM_ORIGIN = `chrome-extension://${METAMASK_ID}/`;
+const metamaskInstalled = () =>
+  context.serviceWorkers().some(w => w.url().startsWith(MM_ORIGIN)) ||
+  context.pages().some(p => p.url().startsWith(MM_ORIGIN));
 
 if (ONLINE) {
   let address = await readAuth();
   if (!address) {
-    console.log('\n=== Sign in once in the browser window ===');
-    console.log('1. First time only: install your wallet extension (MetaMask / Rabby / Coinbase) in THIS browser window.');
-    console.log('2. Reload the game tab, open the save kit (wallet button), connect the wallet and sign the message.');
-    console.log('3. Finish the X steps the game asks for. The bot starts by itself after sign-in.\n');
+    // Give MetaMask a moment to start its service worker if it is already in the profile.
+    await sleep(3000);
+    if (!metamaskInstalled()) {
+      console.log('\nMetaMask is not installed in this profile yet: opening its Chrome Web Store page.');
+      console.log('Click "Install", then create or import a wallet (use a separate wallet without large funds).');
+      const store = await context.newPage();
+      await store.goto(METAMASK_STORE, { timeout: 90_000 }).catch(e => console.error('Could not open the store page:', e.message.split('\n')[0]));
+      let note = 0;
+      while (!metamaskInstalled()) {
+        if (Date.now() - note > 60_000) { console.log('waiting for MetaMask to be installed...'); note = Date.now(); }
+        await sleep(2000);
+      }
+      console.log('MetaMask installed. Finish the wallet setup in its tab.');
+    }
+    // The game only sees a wallet injected at page load, so reload until window.ethereum appears.
+    const hasWallet = () => page.evaluate(() => typeof window.ethereum !== 'undefined').catch(() => false);
+    if (!(await hasWallet())) {
+      console.log('Reloading the game so it can see MetaMask...');
+      await page.reload({ waitUntil: 'commit', timeout: 90_000 }).catch(() => {});
+      await page.waitForSelector('html.is-ready', { state: 'attached', timeout: 240_000 }).catch(() => {});
+    }
+    console.log('\n=== Sign in once in the game tab ===');
+    console.log('Open the save kit (wallet button), connect MetaMask, sign the message and finish the X steps.');
+    console.log('The bot starts by itself after sign-in. Reloading the page is safe.\n');
     let lastNote = 0;
     while (!(address = await readAuth())) {
       if (Date.now() - lastNote > 60_000) { console.log('waiting for wallet sign-in...'); lastNote = Date.now(); }
-      await page.waitForTimeout(3000);
+      await sleep(3000);
     }
   }
-  console.log(`Signed in as ${address.slice(0, 6)}…${address.slice(-4)}`);
+  console.log(`Signed in as ${address.slice(0, 6)}…${address.slice(-4)} (saved in the profile, next launches start right away)`);
+  await page.bringToFront().catch(() => {});
   await page.waitForSelector('html.is-ready', { state: 'attached', timeout: 240_000 });
 } else {
   const authFound = await page.evaluate(() => typeof window.ethereum !== 'undefined');
@@ -278,7 +308,14 @@ for (let i = 0; RUNS === 0 || i < RUNS; i++) {
       const s = globalThis.__guestState || {};
       const a = document.querySelector('#btn-again');
       return { score: s.score, coins: s.coins, distance: Math.round(s.distance || 0), over: !!a && a.offsetParent !== null };
-    });
+    }).catch(() => null);
+    if (!st) {
+      // Page reloaded mid-run: that run is lost, start a new one once the game is ready again.
+      console.log(`run ${i + 1}: page was reloaded, starting over`);
+      await page.waitForSelector('html.is-ready', { state: 'attached', timeout: 240_000 }).catch(() => {});
+      st = { score: 0, coins: 0, distance: 0, reloaded: true };
+      break;
+    }
     if (Date.now() - lastLog > 5000) {
       console.log(`run ${i + 1}: score=${st.score} coins=${st.coins} dist=${st.distance}`);
       lastLog = Date.now();
@@ -294,7 +331,7 @@ for (let i = 0; RUNS === 0 || i < RUNS; i++) {
     if (!ONLINE && args.maxSeconds && Date.now() - t0 > Number(args.maxSeconds) * 1000) { st.stopped = true; break; }
     await page.waitForTimeout(500);
   }
-  if (ONLINE) {
+  if (ONLINE && !st.reloaded) {
     const deadline = Date.now() + 60_000;
     while (!lastRunResponse && Date.now() < deadline) await page.waitForTimeout(1000);
     if (!lastRunResponse) console.log(`run ${i + 1}: no save response from the server (check the game window)`);
