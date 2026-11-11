@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
 const STORAGE_KEY = 'bobble.run.v1';
-const VERSION = 'v12';
+const VERSION = 'v13';
 const args = Object.fromEntries(process.argv.slice(2).map(a => {
   const [k, ...v] = a.replace(/^--/, '').split('=');
   return [k, v.length ? v.join('=') : true];
@@ -293,8 +293,46 @@ async function clickWhenVisible(selector) {
   await page.click(selector, { force: true });
 }
 
+// In-flight page calls reject once the user quits; that is not an error worth printing.
+for (const ev of ['uncaughtException', 'unhandledRejection']) {
+  process.on(ev, e => {
+    if (closing) process.exit(0);
+    console.error(e);
+    process.exit(1);
+  });
+}
+
+// Terminal hotkeys: L = let the current run end (it is saved as usual), P = pause/resume between runs.
+let releaseRequested = false;
+let paused = false;
+if (process.stdin.isTTY) {
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.on('data', async buf => {
+    const k = buf.toString().toLowerCase();
+    if (k === '\u0003') { // Ctrl+C is not delivered as a signal in raw mode
+      closing = true;
+      console.log('\nStopping...');
+      context.close().catch(() => {}).finally(() => process.exit(0));
+      setTimeout(() => process.exit(0), 5000);
+    } else if (k === 'l') {
+      releaseRequested = true;
+      console.log('[L] releasing control: the character will crash and the run will end');
+    } else if (k === 'p') {
+      paused = !paused;
+      console.log(paused ? '[P] paused: no new run will start until you press P again' : '[P] resumed');
+    }
+  });
+  console.log('Keys: L = end the current run now, P = pause/resume between runs, Ctrl+C = quit');
+}
+
 const results = [];
 for (let i = 0; RUNS === 0 || i < RUNS; i++) {
+  if (paused) {
+    console.log('paused, press P to start the next run');
+    while (paused) await sleep(500);
+  }
+  releaseRequested = false;
   await page.evaluate(() => { globalThis.__guestBot = true; });
   const again = await page.$('#btn-again:visible');
   await clickWhenVisible(again ? '#btn-again' : '#btn-play');
@@ -322,6 +360,10 @@ for (let i = 0; RUNS === 0 || i < RUNS; i++) {
       if (SHOT) await page.screenshot({ path: `${SHOT}-${i + 1}.png` });
     }
     if (st.over) break;
+    if (!released && releaseRequested) {
+      await page.evaluate(() => { globalThis.__guestBot = false; }).catch(() => {});
+      released = true;
+    }
     if (!released && MAX_RUN_MS && Date.now() - t0 > MAX_RUN_MS) {
       // Stop steering so the run ends and is submitted while the game session is still valid.
       console.log(`run ${i + 1}: reached ${MAX_RUN_MS / 60000} min, finishing the run so it can be saved`);
