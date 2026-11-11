@@ -35,6 +35,14 @@ npm run bot -- --online
 Options: `--runs=N` (0 = unlimited), `--maxRunMinutes=50` (stops steering after N minutes so the run ends
 while the game session is still valid), `--profile=DIR`, `--channel=chrome|msedge|chromium`.
 
+### Score / coin limits and hotkeys
+
+`--stopScore=N` and/or `--stopCoins=N`: when a run reaches the limit the bot releases control, the character
+crashes, the run is saved, and the bot pauses. The score may overshoot slightly before the crash.
+
+Keys in the terminal: `L` end the current run now, `P` pause/resume between runs,
+`S` (while paused) type new limits and start the next run, `Ctrl+C` quit.
+
 ### Several wallets
 
 The BOBBLE team allowed running the bot on multiple wallets / X accounts "within reasonable limits" (Nov 2026).

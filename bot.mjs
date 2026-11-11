@@ -7,11 +7,12 @@
 import { chromium } from 'playwright';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import readline from 'node:readline/promises';
 
 const URL_RUN = 'https://unboxbobble.com/run';
 const HOST = 'unboxbobble.com';
 const STORAGE_KEY = 'bobble.run.v1';
-const VERSION = 'v13';
+const VERSION = 'v14';
 const args = Object.fromEntries(process.argv.slice(2).map(a => {
   const [k, ...v] = a.replace(/^--/, '').split('=');
   return [k, v.length ? v.join('=') : true];
@@ -302,13 +303,20 @@ for (const ev of ['uncaughtException', 'unhandledRejection']) {
   });
 }
 
-// Terminal hotkeys: L = let the current run end (it is saved as usual), P = pause/resume between runs.
+// Terminal hotkeys: L = let the current run end (it is saved as usual), P = pause/resume between runs,
+// S = set new score/coin limits while paused.
 let releaseRequested = false;
 let paused = false;
+let editLimits = false;
+let prompting = false;
+// 0 = no limit. When reached, the bot lets the run end and pauses so the next run can be set up.
+const limits = { score: Number(args.stopScore || 0), coins: Number(args.stopCoins || 0) };
+const fmtLimits = () => `score ${limits.score || 'no limit'}, coins ${limits.coins || 'no limit'}`;
 if (process.stdin.isTTY) {
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on('data', async buf => {
+    if (prompting) return;
     const k = buf.toString().toLowerCase();
     if (k === '\u0003') { // Ctrl+C is not delivered as a signal in raw mode
       closing = true;
@@ -321,18 +329,49 @@ if (process.stdin.isTTY) {
     } else if (k === 'p') {
       paused = !paused;
       console.log(paused ? '[P] paused: no new run will start until you press P again' : '[P] resumed');
+    } else if (k === 's') {
+      if (paused) editLimits = true;
+      else console.log('[S] press P first to pause, then S to change the limits');
     }
   });
-  console.log('Keys: L = end the current run now, P = pause/resume between runs, Ctrl+C = quit');
+  console.log('Keys: L = end the current run now, P = pause/resume between runs, S = change limits (while paused), Ctrl+C = quit');
+}
+console.log(`Run limits: ${fmtLimits()}`);
+
+async function askLimits() {
+  prompting = true;
+  process.stdin.setRawMode(false);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = async (label, cur) => {
+    const a = (await rl.question(`${label} (now ${cur || 'no limit'}, Enter = keep, 0 = no limit): `)).trim();
+    const n = Number(a);
+    return a === '' || !Number.isFinite(n) || n < 0 ? cur : Math.floor(n);
+  };
+  limits.score = await ask('Stop at score', limits.score);
+  limits.coins = await ask('Stop at coins', limits.coins);
+  rl.close();
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  prompting = false;
+  console.log(`Run limits: ${fmtLimits()}`);
 }
 
 const results = [];
 for (let i = 0; RUNS === 0 || i < RUNS; i++) {
   if (paused) {
-    console.log('paused, press P to start the next run');
-    while (paused) await sleep(500);
+    console.log('paused: press P to start the next run, S to change the limits first');
+    while (paused) {
+      if (editLimits) {
+        editLimits = false;
+        await askLimits();
+        paused = false;
+        console.log('starting the next run');
+      }
+      await sleep(300);
+    }
   }
   releaseRequested = false;
+  let limitHit = false;
   await page.evaluate(() => { globalThis.__guestBot = true; });
   const again = await page.$('#btn-again:visible');
   await clickWhenVisible(again ? '#btn-again' : '#btn-play');
@@ -360,6 +399,11 @@ for (let i = 0; RUNS === 0 || i < RUNS; i++) {
       if (SHOT) await page.screenshot({ path: `${SHOT}-${i + 1}.png` });
     }
     if (st.over) break;
+    if (!released && !limitHit && ((limits.score && st.score >= limits.score) || (limits.coins && st.coins >= limits.coins))) {
+      limitHit = true;
+      releaseRequested = true;
+      console.log(`run ${i + 1}: limit reached (score=${st.score} coins=${st.coins}), releasing control`);
+    }
     if (!released && releaseRequested) {
       await page.evaluate(() => { globalThis.__guestBot = false; }).catch(() => {});
       released = true;
@@ -387,6 +431,7 @@ for (let i = 0; RUNS === 0 || i < RUNS; i++) {
   results.push(st);
   console.log(`run ${i + 1} finished: score=${st.score} coins=${st.coins} dist=${st.distance}${st.stopped ? ' (stopped by --maxSeconds)' : ''}`);
   if (st.stopped) break;
+  if (limitHit && process.stdin.isTTY) paused = true;
 }
 
 if (!ONLINE) {
