@@ -3,3 +3,4 @@ node_modules/
 bobble-debug.png
 bobble-profile/
 bobble-cache/
+profile-*/

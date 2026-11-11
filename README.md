@@ -35,6 +35,18 @@ npm run bot -- --online
 Options: `--runs=N` (0 = unlimited), `--maxRunMinutes=50` (stops steering after N minutes so the run ends
 while the game session is still valid), `--profile=DIR`, `--channel=chrome|msedge|chromium`.
 
+### Several wallets
+
+The BOBBLE team allowed running the bot on multiple wallets / X accounts "within reasonable limits" (Nov 2026).
+Each account gets its own profile folder with its own MetaMask, game sign-in and X session:
+
+```bash
+npm run bot -- --online --profile=profile-1
+npm run bot -- --online --profile=profile-2
+```
+
+A profile can be open in one bot at a time; different profiles can run in parallel in separate terminals.
+
 ## Network options (both modes)
 
 - `--proxy=http://host:port:user:pass` (also `user:pass@host:port`, `socks5://...`) or env `BOBBLE_PROXY`.
