@@ -63,7 +63,9 @@ function startBot(name) {
   if (p.autoContinue) args.push('--autoContinue');
   const env = { ...process.env };
   // Proxy goes through the environment so the password does not show up in process lists.
-  if (settings.proxy) env.BOBBLE_PROXY = settings.proxy; else delete env.BOBBLE_PROXY;
+  // Per-profile proxy (recommended by the BOBBLE team for multiple wallets) overrides the shared one.
+  const proxy = p.proxy || settings.proxy;
+  if (proxy) env.BOBBLE_PROXY = proxy; else delete env.BOBBLE_PROXY;
   const child = fork(path.join(DIR, 'bot.mjs'), args, { cwd: DIR, env, silent: true });
   const prev = bots.get(name);
   bots.set(name, { child, state: 'starting', run: 0, score: 0, coins: 0, distance: 0, runsDone: 0, savedOk: 0,
@@ -130,7 +132,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && u.pathname === '/api/state') {
       const view = {};
       for (const p of settings.profiles) view[p.name] = botView(p.name);
-      return json(res, 200, { settings: { ...settings, proxy: settings.proxy ? maskProxy(settings.proxy) : '', hasProxy: !!settings.proxy }, bots: view });
+      const profiles = settings.profiles.map(({ proxy, ...rest }) => ({ ...rest, proxyMasked: proxy ? maskProxy(proxy) : '' }));
+      return json(res, 200, { settings: { profiles, proxy: settings.proxy ? maskProxy(settings.proxy) : '', hasProxy: !!settings.proxy }, bots: view });
     }
     if (req.method === 'GET' && u.pathname === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -156,7 +159,7 @@ const server = http.createServer(async (req, res) => {
       saveSettings();
       return json(res, 200, { ok: true });
     }
-    const m = /^\/api\/bot\/([A-Za-z0-9_-]{1,40})\/(start|cmd|stop|limits|remove)$/.exec(u.pathname);
+    const m = /^\/api\/bot\/([A-Za-z0-9_-]{1,40})\/(start|cmd|stop|limits|remove|proxy)$/.exec(u.pathname);
     if (!m) return json(res, 404, { error: 'not found' });
     const [, name, action] = m;
     const p = settings.profiles.find(x => x.name === name);
@@ -168,6 +171,11 @@ const server = http.createServer(async (req, res) => {
       saveSettings();
       send(name, { cmd: 'setLimits', score: p.stopScore, coins: p.stopCoins, autoContinue: p.autoContinue });
       if (bots.get(name)) update(name, { limits: p });
+      return json(res, 200, { ok: true });
+    }
+    if (action === 'proxy') {
+      p.proxy = String(body.proxy || '').trim();
+      saveSettings();
       return json(res, 200, { ok: true });
     }
     if (action === 'start') { startBot(name); return json(res, 200, { ok: true }); }
