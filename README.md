@@ -17,7 +17,8 @@ npm run ui            # or double-click start-panel.bat on Windows
 Opens http://127.0.0.1:5577 (only reachable from this computer). There you add profiles, set the proxy
 (shared by all profiles) and per-profile score/coin limits, and use Start / Pause after run / Resume /
 End run / Stop buttons with live score, coins and save results. Settings are stored in `bobble-ui.json`
-(contains the proxy password: do not share it). `npm run ui -- --guest` runs a demo without a wallet.
+(contains proxy passwords: do not share it). Each profile can have its own proxy (the BOBBLE team recommended
+separate IPs for multiple wallets); profiles without one use the shared proxy. `npm run ui -- --guest` runs a demo.
 
 ## Guest mode (default): nothing is saved
 
